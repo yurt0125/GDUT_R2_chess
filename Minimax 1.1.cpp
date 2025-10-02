@@ -108,7 +108,7 @@ public:
         }
         // 跨层相邻：同一列或对角线
         else if (abs(layer1 - layer2) == 1) {
-            return abs(col1 - col2) <= 1;
+            return (col1 == col2) || (abs(col1 - col2) == 1);
         }
         
         return false;
@@ -284,7 +284,7 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
 
     // 执行移动
     bool executeMove(const Move& move, Player player) {
-        bool weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
+        bool& weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
         switch (player) {
             case Player::US:
                 switch (move.type) {
@@ -301,15 +301,6 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
                             if (usKFS_R2 <= 0) return false;
                             usKFS_R2--;
                         }
-
-                        if (layer == 0) {
-                            if (usKFS_R1 <= 0) return false;
-                            usKFS_R1--;
-                        } else { // 中层和顶层使用R2 KFS
-                            if (usKFS_R2 <= 0) return false;
-                            usKFS_R2--;
-                        }
-                        
                         board[layer][col] = player;
                         break;
                     }
@@ -408,7 +399,7 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
     
     // 撤销移动
     void undoMove(const Move& move, Player player) {
-        bool weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
+        bool& weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
         switch (player)
         {
         case Player::US:
@@ -629,9 +620,20 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
                 return false;
             }
         }
-        
+         bool boardFull = true;
+        for (int layer = 0; layer < 3; layer++) {
+            for (int col = 0; col < 3; col++) {
+               if (board[layer][col] == Player::NONE) {
+                   boardFull = false;
+                   break;
+               }
+            }
+        if (!boardFull) break;
+        }
+    
+        return boardFull;
         // 如果没有任何可执行的移动，游戏结束
-        return true;
+//         return true;
     }
     
     // 最优移动决策（考虑机器人放置限制和复合移动）

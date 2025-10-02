@@ -1,0 +1,5 @@
+# 忽略 VS Code 配置目录
+.vscode/
+
+# 忽略编译生成的可执行文件
+Minimax 1.1.exe

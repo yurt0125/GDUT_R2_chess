@@ -569,13 +569,13 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
             
             for (const auto& move : moves) {
                 // 模拟移动
-                executeMove(move, player);
+                executeMove(move, currentPlayer);
                 
                 int eval = minimax(depth - 1, false, alpha, beta, player, robotType);
                 maxEval = max(maxEval, eval);
                 
                 // 撤销移动
-                undoMove(move, player);
+                undoMove(move, currentPlayer);
                 
                 alpha = max(alpha, eval);
                 if (beta <= alpha) break;
@@ -586,13 +586,13 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
             
             for (const auto& move : moves) {
                 // 模拟移动
-                executeMove(move, (player == Player::US) ? Player::OPPONENT : Player::US);
+                executeMove(move, currentPlayer);
                 
                 int eval = minimax(depth - 1, true, alpha, beta, player, robotType);
                 minEval = min(minEval, eval);
                 
                 // 撤销移动
-                undoMove(move, (player == Player::US) ? Player::OPPONENT : Player::US);
+                undoMove(move, currentPlayer);
                 
                 beta = min(beta, eval);
                 if (beta <= alpha) break;

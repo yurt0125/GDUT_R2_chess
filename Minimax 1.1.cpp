@@ -547,59 +547,69 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
     //beta：当前已知的最小上界（对对手来说），初始值为正无穷。
     //player：指定本次模拟的“主角”是谁（比如AI或对手），决定评估时以谁为中心。  决定了评估分数时以谁为中心（evaluate(player)），最终返回的分数是“对player来说”的好坏。
 
-    int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player, const string& robotType) {
-        if (depth == 0 || isGameOver()) {
-            return evaluate(player);
-        }
-        
-        Player currentPlayer = isMaximizing ? player : 
-                             (player == Player::US ? Player::OPPONENT : Player::US);
-        
-        vector<Move> moves = getAvailableMoves(currentPlayer, robotType);
-        
-        // 按优先级排序移动
-        // sort(moves.begin(), moves.end(), [&](const Move& a, const Move& b) {
-        //     return evaluateMovePriority(a, currentPlayer) > evaluateMovePriority(b, currentPlayer);
-        // });//匿名函数，
-         
-         // 这里的排序确保了在每一层递归中，最有前途的移动会被优先考虑，从而更早地触发剪枝条件，提高算法效率。
-        
-        if (isMaximizing) {
-            int maxEval = numeric_limits<int>::min();
-            
-            for (const auto& move : moves) {
-                // 模拟移动
-                executeMove(move, currentPlayer);
-                
-                int eval = minimax(depth - 1, false, alpha, beta, player, robotType);
-                maxEval = max(maxEval, eval);
-                
-                // 撤销移动
-                undoMove(move, currentPlayer);
-                
-                alpha = max(alpha, eval);
-                if (beta <= alpha) break;
-            }
-            return maxEval;
-        } else {
-            int minEval = numeric_limits<int>::max();
-            
-            for (const auto& move : moves) {
-                // 模拟移动
-                executeMove(move, currentPlayer);
-                
-                int eval = minimax(depth - 1, true, alpha, beta, player, robotType);
-                minEval = min(minEval, eval);
-                
-                // 撤销移动
-                undoMove(move, currentPlayer);
-                
-                beta = min(beta, eval);
-                if (beta <= alpha) break;
-            }
-            return minEval;
-        }
+int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player) {
+    if (depth == 0 || isGameOver()) {
+        return evaluate(player);
     }
+    
+    Player currentPlayer = isMaximizing ? player : 
+                         (player == Player::US ? Player::OPPONENT : Player::US);
+    
+    // 获取当前玩家所有可用的移动（包括所有机器人类型）
+    vector<Move> allMoves;
+    vector<string> robotTypes = {"R1", "R2", "R2_LIFTED"};
+    
+    for (const string& robotType : robotTypes) {
+        vector<Move> moves = getAvailableMoves(currentPlayer, robotType);
+        allMoves.insert(allMoves.end(), moves.begin(), moves.end());
+    }
+    
+    // 如果没有可用移动，直接返回评估值
+    if (allMoves.empty()) {
+        return evaluate(player);
+    }
+    
+    // 按优先级排序移动（可选，提高剪枝效率）
+    // sort(allMoves.begin(), allMoves.end(), [&](const Move& a, const Move& b) {
+    //     return evaluateMovePriority(a, currentPlayer) > evaluateMovePriority(b, currentPlayer);
+    // });
+    
+    if (isMaximizing) {
+        int maxEval = numeric_limits<int>::min();
+        
+        for (const auto& move : allMoves) {
+            // 模拟移动
+            executeMove(move, currentPlayer);
+            
+            int eval = minimax(depth - 1, false, alpha, beta, player);
+            maxEval = max(maxEval, eval);
+            
+            // 撤销移动
+            undoMove(move, currentPlayer);
+            
+            alpha = max(alpha, eval);
+            if (beta <= alpha) break;
+        }
+        return maxEval;
+    } else {
+        int minEval = numeric_limits<int>::max();
+        
+        for (const auto& move : allMoves) {
+            // 模拟移动
+            executeMove(move, currentPlayer);
+            
+            int eval = minimax(depth - 1, true, alpha, beta, player);
+            minEval = min(minEval, eval);
+            
+            // 撤销移动
+            undoMove(move, currentPlayer);
+            
+            beta = min(beta, eval);
+            if (beta <= alpha) break;
+        }
+        return minEval;
+    }
+}
     
     bool isGameOver() {
         // 检查是否有任一方获胜
@@ -658,7 +668,7 @@ vector<Move> getAvailableMoves(Player player, const string& robotType) {
             
             int score = minimax(depth - 1, false, 
                               numeric_limits<int>::min(),
-                              numeric_limits<int>::max(), player, robotType);
+                              numeric_limits<int>::max(), player);
             
             // 考虑时间效率
             score -= move.timeCost * 10;
@@ -868,8 +878,8 @@ int main() {
     game.placeKFS(1, 0, Player::NONE);    // 我方在底层中间
     game.placeKFS(1, 1, Player::NONE);    // 我方在中层中间
     game.placeKFS(1, 2, Player::NONE);    // 我方在顶层中间
-    game.placeKFS(2, 0, Player::NONE);    // 我方在底层中间
-    game.placeKFS(2, 1, Player::NONE);    // 我方在中层中间
+    game.placeKFS(2, 0, Player::OPPONENT);    // 我方在底层中间
+    game.placeKFS(2, 1, Player::OPPONENT);    // 我方在中层中间
     game.placeKFS(2, 2, Player::OPPONENT);    // 我方在顶层中间
 
     cout << "当前棋盘状态:" << endl;

@@ -6,6 +6,13 @@
 3. 考虑KFS资源限制（R1:3个，R2:3个）
 4. 优化评估函数，考虑时间效率
 */
+/*
+问题分析：
+1.没有考虑R1R2配合取胜
+2.重复考虑（2，2）（1，2）和（1，2）（2，2）
+3.push时重复考虑（3次）
+4.push在局面评分时未做倾向处理
+*/
 
 #include <iostream>
 #include <vector>
@@ -872,15 +879,15 @@ int main() {
     
     
     // 示例初始局面
-    game.placeKFS(0, 0, Player::US);    // 我方在底层中间
-    game.placeKFS(0, 1, Player::OPPONENT);    // 我方在中层中间
+    game.placeKFS(0, 0, Player::NONE);    // 我方在底层中间
+    game.placeKFS(0, 1, Player::US);    // 我方在中层中间
     game.placeKFS(0, 2, Player::NONE);    // 我方在顶层中间
     game.placeKFS(1, 0, Player::NONE);    // 我方在底层中间
-    game.placeKFS(1, 1, Player::NONE);    // 我方在中层中间
+    game.placeKFS(1, 1, Player::OPPONENT);    // 我方在中层中间
     game.placeKFS(1, 2, Player::NONE);    // 我方在顶层中间
-    game.placeKFS(2, 0, Player::OPPONENT);    // 我方在底层中间
+    game.placeKFS(2, 0, Player::NONE   );    // 我方在底层中间
     game.placeKFS(2, 1, Player::OPPONENT);    // 我方在中层中间
-    game.placeKFS(2, 2, Player::OPPONENT);    // 我方在顶层中间
+    game.placeKFS(2, 2, Player::NONE);    // 我方在顶层中间
 
     cout << "当前棋盘状态:" << endl;
     game.displayBoard();

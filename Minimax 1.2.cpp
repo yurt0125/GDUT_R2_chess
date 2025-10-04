@@ -743,63 +743,63 @@ public:
     }
     
     // 极小化极大算法
-int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player) {
-    if (depth == 0 || isGameOver()) {
-        return evaluate(player);
-    }
-    
-    Player currentPlayer = isMaximizing ? player : 
-                         (player == Player::US ? Player::OPPONENT : Player::US);
-    
-    // 获取当前玩家所有可用的移动（包括所有机器人类型和组合移动）
-    vector<Move> allMoves = getAvailableMoves(currentPlayer, "ALL");
-    
-    // 如果没有可用移动，直接返回评估值
-    if (allMoves.empty()) {
-        return evaluate(player);
-    }
-    
-    // 按优先级排序移动（可选，提高剪枝效率）
-    // sort(allMoves.begin(), allMoves.end(), [&](const Move& a, const Move& b) {
-    //     return evaluateMovePriority(a, currentPlayer) > evaluateMovePriority(b, currentPlayer);
-    // });
-    
-    if (isMaximizing) {
-        int maxEval = numeric_limits<int>::min();
-        
-        for (const auto& move : allMoves) {
-            // 模拟移动
-            executeMove(move, currentPlayer);
-            
-            int eval = minimax(depth - 1, false, alpha, beta, player);
-            maxEval = max(maxEval, eval);
-            
-            // 撤销移动
-            undoMove(move, currentPlayer);
-            
-            alpha = max(alpha, eval);
-            if (beta <= alpha) break;
+    int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player, int maxdepth) {
+        if (depth == 0 || isGameOver()) {
+            return evaluate(player)- (maxdepth - depth) * 5; // 考虑时间效率
         }
-        return maxEval;
-    } else {
-        int minEval = numeric_limits<int>::max();
         
-        for (const auto& move : allMoves) {
-            // 模拟移动
-            executeMove(move, currentPlayer);
-            
-            int eval = minimax(depth - 1, true, alpha, beta, player);
-            minEval = min(minEval, eval);
-            
-            // 撤销移动
-            undoMove(move, currentPlayer);
-            
-            beta = min(beta, eval);
-            if (beta <= alpha) break;
+        Player currentPlayer = isMaximizing ? player : 
+                            (player == Player::US ? Player::OPPONENT : Player::US);
+        
+        // 获取当前玩家所有可用的移动（包括所有机器人类型和组合移动）
+        vector<Move> allMoves = getAvailableMoves(currentPlayer, "ALL");
+        
+        // 如果没有可用移动，直接返回评估值
+        if (allMoves.empty()) {
+            return evaluate(player);
         }
-        return minEval;
+        
+        // 按优先级排序移动（可选，提高剪枝效率）
+        // sort(allMoves.begin(), allMoves.end(), [&](const Move& a, const Move& b) {
+        //     return evaluateMovePriority(a, currentPlayer) > evaluateMovePriority(b, currentPlayer);
+        // });
+        
+        if (isMaximizing) {
+            int maxEval = numeric_limits<int>::min();
+            
+            for (const auto& move : allMoves) {
+                // 模拟移动
+                executeMove(move, currentPlayer);
+                
+                int eval = minimax(depth - 1, false, alpha, beta, player,maxdepth);
+                maxEval = max(maxEval, eval);
+                
+                // 撤销移动
+                undoMove(move, currentPlayer);
+                
+                alpha = max(alpha, eval);
+                if (beta <= alpha) break;
+            }
+            return maxEval;
+        } else {
+            int minEval = numeric_limits<int>::max();
+            
+            for (const auto& move : allMoves) {
+                // 模拟移动
+                executeMove(move, currentPlayer);
+                
+                int eval = minimax(depth - 1, true, alpha, beta, player,maxdepth);
+                minEval = min(minEval, eval);
+                
+                // 撤销移动
+                undoMove(move, currentPlayer);
+                
+                beta = min(beta, eval);
+                if (beta <= alpha) break;
+            }
+            return minEval;
+        }
     }
-}
     
     bool isGameOver() {
         // 检查是否有任一方获胜
@@ -860,7 +860,7 @@ int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player) {
             
             int score = minimax(depth - 1, false, 
                               numeric_limits<int>::min(),
-                              numeric_limits<int>::max(), player);
+                              numeric_limits<int>::max(), player,depth);
             
             // 考虑时间效率
             score -= move.timeCost * 10;

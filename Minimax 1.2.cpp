@@ -1,5 +1,5 @@
 //2025-09-24
-// 三维井字棋最优摆放模型 version 1.2
+// 三维井字棋最优摆放模型 version 1.7
 /*主要改进：
 1. 支持复合移动（同时放置两个方块）
 2. 添加推下操作策略（只在必要时使用）
@@ -7,6 +7,11 @@
 4. 优化评估函数，考虑时间效率
 5. 支持R1和R2同时移动的组合策略
 6. 支持R1推下同时R2放置的新移动类型
+7. 新增R2_DOUBLE移动类型（R2单独在中层放置两个相邻方块）
+8. 新增COMBINED_R2_DOUBLE和PUSH_R2_DOUBLE组合移动
+9. 修改minimax算法，添加深度折扣
+10. 优化移动选择逻辑
+11. 添加三个位置支持，用于同时放置三个方块
 */
 
 #include <iostream>
@@ -15,6 +20,7 @@
 #include <limits>
 #include <string>
 #include <unordered_set>
+#include <cmath>
 
 using namespace std;
 
@@ -22,25 +28,33 @@ enum class Player { NONE, US, OPPONENT };
 
 // 移动类型
 enum class MoveType { 
-    SINGLE,     // 单个放置
-    DOUBLE,     // 同时放置两个方块
-    PUSH,       // 推下对方KFS
-    COMBINED,   // R1和R2同时放置
-    PUSH_PLACE  // R1推下同时R2放置
+    SINGLE,               // 单个放置
+    R2_LIFTED_DOUBLE,     // 被举起的R2同时放置两个方块
+    R2_DOUBLE,            // R2单独在中层放置两个相邻方块
+    PUSH,                 // 推下对方KFS
+    COMBINED,             // R1和R2同时放置
+    PUSH_PLACE,           // R1推下同时R2放置
+    COMBINED_R2_DOUBLE,   // R1放置底层同时R2在中层放置两个方块
+    PUSH_R2_DOUBLE        // R1推下同时R2在中层放置两个方块
 };
 
 // 移动表示
 struct Move {
     MoveType type;
     pair<int, int> pos1;  // 第一个位置
-    pair<int, int> pos2;  // 第二个位置（DOUBLE、COMBINED和PUSH_PLACE类型使用）
+    pair<int, int> pos2;  // 第二个位置
+    pair<int, int> pos3;  // 第三个位置（用于三个方块的情况）
     int timeCost;         // 时间代价
     
-    Move(MoveType t, pair<int, int> p1, pair<int, int> p2 = {-1, -1}) 
-        : type(t), pos1(p1), pos2(p2) {
+    Move(MoveType t, pair<int, int> p1, pair<int, int> p2 = {-1, -1}, pair<int, int> p3 = {-1, -1}) 
+        : type(t), pos1(p1), pos2(p2), pos3(p3) {
         // 设置时间代价
-        if (type == MoveType::PUSH || type == MoveType::PUSH_PLACE) timeCost = 2;
-        else timeCost = 1;
+        if (type == MoveType::PUSH || type == MoveType::PUSH_PLACE || 
+            type == MoveType::PUSH_R2_DOUBLE) {
+            timeCost = 2;
+        } else {
+            timeCost = 1;
+        }
     }
 };
 
@@ -108,7 +122,7 @@ public:
         
         // 同层相邻：水平、垂直或对角线
         if (layer1 == layer2) {
-            return abs(col1 - col2) == 1;
+            return abs(col1 - col2) <= 1; // 修改为允许对角线相邻
         }
         // 跨层相邻：同一列或对角线
         else if (abs(layer1 - layer2) == 1) {
@@ -235,6 +249,14 @@ public:
         vector<Move> pushPlaceMoves = getPushPlaceMoves(player, r2Moves);
         moves.insert(moves.end(), pushPlaceMoves.begin(), pushPlaceMoves.end());
         
+        // 生成R1放置底层同时R2在中层放置两个方块的组合移动
+        vector<Move> combinedR2DoubleMoves = getCombinedR2DoubleMoves(player, r1Moves);
+        moves.insert(moves.end(), combinedR2DoubleMoves.begin(), combinedR2DoubleMoves.end());
+        
+        // 生成R1推下同时R2在中层放置两个方块的组合移动
+        vector<Move> pushR2DoubleMoves = getPushR2DoubleMoves(player);
+        moves.insert(moves.end(), pushR2DoubleMoves.begin(), pushR2DoubleMoves.end());
+        
         return moves;
     }
     
@@ -285,14 +307,37 @@ public:
             }
         }
         
-        // 如果是被举起的R2，可以生成复合移动（同时放置两个方块）
+        // 如果是R2（中层），可以生成R2_DOUBLE移动（在中层同时放置两个相邻方块）
+        if (robotType == "R2") {
+            // 检查R2 KFS资源是否足够
+            bool hasEnoughR2 = (player == Player::US && usKFS_R2 >= 2) || 
+                            (player == Player::OPPONENT && opponentKFS_R2 >= 2);
+            
+            if (hasEnoughR2) {
+                // 生成所有可能的R2_DOUBLE移动（两个位置都在中层且相邻）
+                for (int col1 = 0; col1 < 3; col1++) {
+                    if (board[1][col1] != Player::NONE) continue;
+                    
+                    for (int col2 = col1 + 1; col2 < 3; col2++) {
+                        if (board[1][col2] != Player::NONE) continue;
+                        
+                        // 检查位置是否相邻（在中层，水平相邻或对角线相邻）
+                        if (arePositionsAdjacent({1, col1}, {1, col2})) {
+                            moves.push_back(Move(MoveType::R2_DOUBLE, {1, col1}, {1, col2}));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 如果是被举起的R2，可以生成R2_LIFTED_DOUBLE移动（同时放置两个方块）
         if (robotType == "R2_LIFTED") {
             // 检查R2 KFS资源是否足够
             bool hasEnoughR2 = (player == Player::US && usKFS_R2 >= 2) || 
                             (player == Player::OPPONENT && opponentKFS_R2 >= 2);
             
             if (hasEnoughR2) {
-                // 生成所有可能的复合移动（两个位置都在顶层或一个顶层一个中层）
+                // 生成所有可能的R2_LIFTED_DOUBLE移动（两个位置都在顶层或一个顶层一个中层）
                 for (int layer1 = 1; layer1 <= 2; layer1++) { // 中层或顶层
                     for (int col1 = 0; col1 < 3; col1++) {
                         if (board[layer1][col1] != Player::NONE) continue;
@@ -306,7 +351,7 @@ public:
                                 
                                 // 检查位置是否相邻
                                 if (arePositionsAdjacent({layer1, col1}, {layer2, col2})) {
-                                    moves.push_back(Move(MoveType::DOUBLE, {layer1, col1}, {layer2, col2}));
+                                    moves.push_back(Move(MoveType::R2_LIFTED_DOUBLE, {layer1, col1}, {layer2, col2}));
                                 }
                             }
                         }
@@ -347,16 +392,16 @@ public:
         
         // 生成所有可能的R1和R2移动组合
         for (const auto& r1Move : r1Moves) {
-        if (r1Move.type != MoveType::SINGLE) continue;
-        
-        for (const auto& r2Move : r2Moves) {
-            if (r2Move.type != MoveType::SINGLE) continue;
+            if (r1Move.type != MoveType::SINGLE) continue;
             
-            if (r1Move.pos1 == r2Move.pos1) continue;
-            
-            combinedMoves.push_back(Move(MoveType::COMBINED, r1Move.pos1, r2Move.pos1));
+            for (const auto& r2Move : r2Moves) {
+                if (r2Move.type != MoveType::SINGLE) continue;
+                
+                if (r1Move.pos1 == r2Move.pos1) continue;
+                
+                combinedMoves.push_back(Move(MoveType::COMBINED, r1Move.pos1, r2Move.pos1));
+            }
         }
-    }
         
         return combinedMoves;
     }
@@ -406,6 +451,118 @@ public:
         return pushPlaceMoves;
     }
     
+    // 获取R1放置底层同时R2在中层放置两个方块的组合移动
+    vector<Move> getCombinedR2DoubleMoves(Player player, const vector<Move>& r1Moves) {
+        vector<Move> combinedR2DoubleMoves;
+        
+        // 检查资源是否足够
+        bool hasR1Resource = (player == Player::US && usKFS_R1 > 0) || 
+                           (player == Player::OPPONENT && opponentKFS_R1 > 0);
+        bool hasR2Resource = (player == Player::US && usKFS_R2 >= 2) || 
+                           (player == Player::OPPONENT && opponentKFS_R2 >= 2);
+        
+        if (!hasR1Resource || !hasR2Resource) {
+            return combinedR2DoubleMoves;
+        }
+        
+        // 生成所有可能的R2_DOUBLE移动
+        vector<Move> r2DoubleMoves;
+        for (int col1 = 0; col1 < 3; col1++) {
+            if (board[1][col1] != Player::NONE) continue;
+            
+            for (int col2 = col1 + 1; col2 < 3; col2++) {
+                if (board[1][col2] != Player::NONE) continue;
+                
+                // 检查位置是否相邻
+                if (arePositionsAdjacent({1, col1}, {1, col2})) {
+                    r2DoubleMoves.push_back(Move(MoveType::R2_DOUBLE, {1, col1}, {1, col2}));
+                }
+            }
+        }
+        
+        // 生成所有可能的组合
+        for (const auto& r1Move : r1Moves) {
+            if (r1Move.type != MoveType::SINGLE) continue;
+            
+            for (const auto& r2DoubleMove : r2DoubleMoves) {
+                // 确保R1移动在底层
+                if (r1Move.pos1.first != 0) continue;
+                
+                // 确保位置不冲突
+                if (r1Move.pos1 == r2DoubleMove.pos1 || r1Move.pos1 == r2DoubleMove.pos2) continue;
+                
+                // 使用三个位置：R1位置 + R2两个位置
+                combinedR2DoubleMoves.push_back(Move(MoveType::COMBINED_R2_DOUBLE, 
+                                                   r1Move.pos1, 
+                                                   r2DoubleMove.pos1,
+                                                   r2DoubleMove.pos2));
+            }
+        }
+        
+        return combinedR2DoubleMoves;
+    }
+    
+    // 获取R1推下同时R2在中层放置两个方块的组合移动
+    vector<Move> getPushR2DoubleMoves(Player player) {
+        vector<Move> pushR2DoubleMoves;
+        Player opponent = (player == Player::US) ? Player::OPPONENT : Player::US;
+        
+        bool weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
+        
+        // 检查条件：兵器未使用，且对方有获胜威胁
+        if (weaponUsed || evaluateThreats(player, opponent) >= -500) {
+            return pushR2DoubleMoves;
+        }
+        
+        // 检查资源是否足够进行R2放置
+        bool hasR2Resource = (player == Player::US && usKFS_R2 >= 2) || 
+                           (player == Player::OPPONENT && opponentKFS_R2 >= 2);
+        
+        if (!hasR2Resource) {
+            return pushR2DoubleMoves;
+        }
+        
+        // 生成所有可能的R2_DOUBLE移动
+        vector<Move> r2DoubleMoves;
+        for (int col1 = 0; col1 < 3; col1++) {
+            if (board[1][col1] != Player::NONE) continue;
+            
+            for (int col2 = col1 + 1; col2 < 3; col2++) {
+                if (board[1][col2] != Player::NONE) continue;
+                
+                // 检查位置是否相邻
+                if (arePositionsAdjacent({1, col1}, {1, col2})) {
+                    r2DoubleMoves.push_back(Move(MoveType::R2_DOUBLE, {1, col1}, {1, col2}));
+                }
+            }
+        }
+        
+        // 生成所有可能的推下和R2_DOUBLE组合
+        for (int pushLayer = 0; pushLayer < 3; pushLayer++) {
+            for (int pushCol = 0; pushCol < 3; pushCol++) {
+                // 检查是否可以推下这个位置
+                if (board[pushLayer][pushCol] != opponent) continue;
+                
+                // 对于每个可能的推下位置，找到所有R2_DOUBLE可以放置的位置
+                for (const auto& r2DoubleMove : r2DoubleMoves) {
+                    // R2不能放在R1推下的位置
+                    if ((pushLayer == 1 && pushCol == r2DoubleMove.pos1.second) ||
+                        (pushLayer == 1 && pushCol == r2DoubleMove.pos2.second)) {
+                        continue;
+                    }
+                    
+                    // 创建推下+R2_DOUBLE组合移动，使用三个位置
+                    pushR2DoubleMoves.push_back(Move(MoveType::PUSH_R2_DOUBLE, 
+                                                   {pushLayer, pushCol}, 
+                                                   r2DoubleMove.pos1,
+                                                   r2DoubleMove.pos2));
+                }
+            }
+        }
+        
+        return pushR2DoubleMoves;
+    }
+    
     // 执行移动
     bool executeMove(const Move& move, Player player) {
         bool& weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
@@ -438,14 +595,38 @@ public:
                 break;
             }
                 
-            case MoveType::DOUBLE: {
+            case MoveType::R2_LIFTED_DOUBLE: {
                 int layer1 = move.pos1.first, col1 = move.pos1.second;
                 int layer2 = move.pos2.first, col2 = move.pos2.second;
                 
                 if (board[layer1][col1] != Player::NONE || 
                     board[layer2][col2] != Player::NONE) return false;
                 
-                // DOUBLE移动只发生在中层和顶层，只使用R2 KFS
+                // R2_LIFTED_DOUBLE移动只发生在中层和顶层，只使用R2 KFS
+                if (player == Player::US) {
+                    if (usKFS_R2 < 2) return false;
+                    usKFS_R2 -= 2;
+                } else {
+                    if (opponentKFS_R2 < 2) return false;
+                    opponentKFS_R2 -= 2;
+                }
+                
+                board[layer1][col1] = player;
+                board[layer2][col2] = player;
+                break;
+            }
+                
+            case MoveType::R2_DOUBLE: {
+                int layer1 = move.pos1.first, col1 = move.pos1.second;
+                int layer2 = move.pos2.first, col2 = move.pos2.second;
+                
+                // 确保两个位置都在中层
+                if (layer1 != 1 || layer2 != 1) return false;
+                
+                if (board[layer1][col1] != Player::NONE || 
+                    board[layer2][col2] != Player::NONE) return false;
+                
+                // R2_DOUBLE移动只使用R2 KFS
                 if (player == Player::US) {
                     if (usKFS_R2 < 2) return false;
                     usKFS_R2 -= 2;
@@ -554,6 +735,80 @@ public:
                 weaponUsed = true; // 标记兵器已使用
                 break;
             }
+                
+            case MoveType::COMBINED_R2_DOUBLE: {
+                // 执行R1移动（底层）
+                int r1Layer = move.pos1.first, r1Col = move.pos1.second;
+                if (board[r1Layer][r1Col] != Player::NONE) return false;
+                
+                // 执行R2_DOUBLE移动（中层）
+                int r2Layer1 = move.pos2.first, r2Col1 = move.pos2.second;
+                int r2Layer2 = move.pos3.first, r2Col2 = move.pos3.second;
+                if (board[r2Layer1][r2Col1] != Player::NONE || board[r2Layer2][r2Col2] != Player::NONE) return false;
+                
+                // 检查资源
+                if (player == Player::US) {
+                    if (usKFS_R1 <= 0 || usKFS_R2 < 2) return false;
+                    usKFS_R1--;
+                    usKFS_R2 -= 2;
+                } else {
+                    if (opponentKFS_R1 <= 0 || opponentKFS_R2 < 2) return false;
+                    opponentKFS_R1--;
+                    opponentKFS_R2 -= 2;
+                }
+                
+                board[r1Layer][r1Col] = player;
+                board[r2Layer1][r2Col1] = player;
+                board[r2Layer2][r2Col2] = player;
+                break;
+            }
+                
+            case MoveType::PUSH_R2_DOUBLE: {
+                Player opponent = (player == Player::US) ? Player::OPPONENT : Player::US;
+                
+                // 检查兵器是否已使用
+                if (weaponUsed) return false;
+                
+                // 执行推下操作
+                int pushLayer = move.pos1.first, pushCol = move.pos1.second;
+                if (board[pushLayer][pushCol] != opponent) return false;
+                
+                // 执行R2_DOUBLE移动（中层）
+                int r2Layer1 = move.pos2.first, r2Col1 = move.pos2.second;
+                int r2Layer2 = move.pos3.first, r2Col2 = move.pos3.second;
+                if (board[r2Layer1][r2Col1] != Player::NONE || board[r2Layer2][r2Col2] != Player::NONE) return false;
+                
+                // 检查R2资源
+                if (player == Player::US) {
+                    if (usKFS_R2 < 2) return false;
+                    usKFS_R2 -= 2;
+                } else {
+                    if (opponentKFS_R2 < 2) return false;
+                    opponentKFS_R2 -= 2;
+                }
+                
+                // 修复资源 - 推下后对方恢复资源
+                if(player == Player::US) {
+                   if(pushLayer == 0) {
+                       opponentKFS_R1++;
+                   } else {
+                       if(pushLayer>=1) opponentKFS_R2++;
+                   }
+                } else {
+                    if(pushLayer == 0) {
+                       usKFS_R1++;
+                   } else {
+                       if(pushLayer >= 1) usKFS_R2++;
+                   }
+                }
+                
+                // 执行操作
+                board[pushLayer][pushCol] = Player::NONE; // 推下
+                board[r2Layer1][r2Col1] = player;        // R2放置第一个
+                board[r2Layer2][r2Col2] = player;        // R2放置第二个
+                weaponUsed = true; // 标记兵器已使用
+                break;
+            }
         }
         return true;
     }
@@ -580,14 +835,27 @@ public:
                 break;
             }
                 
-            case MoveType::DOUBLE: {
+            case MoveType::R2_LIFTED_DOUBLE: {
                 int layer1 = move.pos1.first, col1 = move.pos1.second;
                 int layer2 = move.pos2.first, col2 = move.pos2.second;
                 
                 board[layer1][col1] = Player::NONE;
                 board[layer2][col2] = Player::NONE;
                 
-                // 恢复资源 - DOUBLE移动只发生在中层和顶层，只使用R2 KFS
+                // 恢复资源 - R2_LIFTED_DOUBLE移动只发生在中层和顶层，只使用R2 KFS
+                if (player == Player::US) usKFS_R2 += 2;
+                else opponentKFS_R2 += 2;
+                break;
+            }
+                
+            case MoveType::R2_DOUBLE: {
+                int layer1 = move.pos1.first, col1 = move.pos1.second;
+                int layer2 = move.pos2.first, col2 = move.pos2.second;
+                
+                board[layer1][col1] = Player::NONE;
+                board[layer2][col2] = Player::NONE;
+                
+                // 恢复资源 - R2_DOUBLE移动只使用R2 KFS
                 if (player == Player::US) usKFS_R2 += 2;
                 else opponentKFS_R2 += 2;
                 break;
@@ -673,6 +941,68 @@ public:
                 weaponUsed = false;
                 break;
             }
+                
+            case MoveType::COMBINED_R2_DOUBLE: {
+                // 撤销R1移动
+                int r1Layer = move.pos1.first, r1Col = move.pos1.second;
+                board[r1Layer][r1Col] = Player::NONE;
+                
+                // 撤销R2_DOUBLE移动
+                int r2Layer1 = move.pos2.first, r2Col1 = move.pos2.second;
+                int r2Layer2 = move.pos3.first, r2Col2 = move.pos3.second;
+                board[r2Layer1][r2Col1] = Player::NONE;
+                board[r2Layer2][r2Col2] = Player::NONE;
+                
+                // 恢复资源
+                if (player == Player::US) {
+                    usKFS_R1++;
+                    usKFS_R2 += 2;
+                } else {
+                    opponentKFS_R1++;
+                    opponentKFS_R2 += 2;
+                }
+                break;
+            }
+                
+            case MoveType::PUSH_R2_DOUBLE: {
+                Player opponent = (player == Player::US) ? Player::OPPONENT : Player::US;
+                
+                int pushLayer = move.pos1.first, pushCol = move.pos1.second;
+                int r2Layer1 = move.pos2.first, r2Col1 = move.pos2.second;
+                int r2Layer2 = move.pos3.first, r2Col2 = move.pos3.second;
+                
+                // 恢复推下的棋子
+                board[pushLayer][pushCol] = opponent;
+                
+                // 恢复R2_DOUBLE移动
+                board[r2Layer1][r2Col1] = Player::NONE;
+                board[r2Layer2][r2Col2] = Player::NONE;
+                
+                // 恢复资源
+                if (player == Player::US) {
+                    usKFS_R2 += 2;
+                } else {
+                    opponentKFS_R2 += 2;
+                }
+                
+                // 修复资源 - 撤销推下后对方资源恢复
+                if(player == Player::US) {
+                   if(pushLayer == 0) {
+                       opponentKFS_R1--;
+                   } else {
+                       if(pushLayer>=1) opponentKFS_R2--;
+                   }
+                } else {
+                    if(pushLayer == 0) {
+                       usKFS_R1--;
+                   } else {
+                       if(pushLayer >= 1) usKFS_R2--;
+                   }
+                }
+                // 恢复兵器状态
+                weaponUsed = false;
+                break;
+            }
         }
     }
     
@@ -689,7 +1019,7 @@ public:
             
             if (wins) priority += 10000;
         }
-        else if (move.type == MoveType::DOUBLE) {
+        else if (move.type == MoveType::R2_LIFTED_DOUBLE || move.type == MoveType::R2_DOUBLE) {
             // 检查是否有一个放置能立即获胜
             board[move.pos1.first][move.pos1.second] = player;
             bool wins1 = checkWin(player);
@@ -704,14 +1034,12 @@ public:
         else if (move.type == MoveType::COMBINED) {
             // 检查组合移动是否能立即获胜
             board[move.pos1.first][move.pos1.second] = player;
-            bool wins1 = checkWin(player);
-            board[move.pos1.first][move.pos1.second] = Player::NONE;
-            
             board[move.pos2.first][move.pos2.second] = player;
-            bool wins2 = checkWin(player);
+            bool wins = checkWin(player);
+            board[move.pos1.first][move.pos1.second] = Player::NONE;
             board[move.pos2.first][move.pos2.second] = Player::NONE;
             
-            if (wins1 || wins2) priority += 10000;
+            if (wins) priority += 10000;
         }
         else if (move.type == MoveType::PUSH_PLACE) {
             // 检查推下+放置组合是否能立即获胜
@@ -721,12 +1049,34 @@ public:
             
             if (wins) priority += 10000;
         }
+        else if (move.type == MoveType::COMBINED_R2_DOUBLE) {
+            // 检查组合移动是否能立即获胜
+            board[move.pos1.first][move.pos1.second] = player;
+            board[move.pos2.first][move.pos2.second] = player;
+            board[move.pos3.first][move.pos3.second] = player;
+            bool wins = checkWin(player);
+            board[move.pos1.first][move.pos1.second] = Player::NONE;
+            board[move.pos2.first][move.pos2.second] = Player::NONE;
+            board[move.pos3.first][move.pos3.second] = Player::NONE;
+            
+            if (wins) priority += 10000;
+        }
+        else if (move.type == MoveType::PUSH_R2_DOUBLE) {
+            // 检查推下+R2_DOUBLE组合是否能立即获胜
+            board[move.pos2.first][move.pos2.second] = player;
+            board[move.pos3.first][move.pos3.second] = player;
+            bool wins = checkWin(player);
+            board[move.pos2.first][move.pos2.second] = Player::NONE;
+            board[move.pos3.first][move.pos3.second] = Player::NONE;
+            
+            if (wins) priority += 10000;
+        }
 
         // 优先高层放置
         if (move.type == MoveType::SINGLE) {
             priority += move.pos1.first * 10; // 层越高优先级越高
         }
-        else if (move.type == MoveType::DOUBLE) {
+        else if (move.type == MoveType::R2_LIFTED_DOUBLE || move.type == MoveType::R2_DOUBLE) {
             priority += (move.pos1.first + move.pos2.first) * 10;
         }
         else if (move.type == MoveType::COMBINED) {
@@ -734,6 +1084,12 @@ public:
         }
         else if (move.type == MoveType::PUSH_PLACE) {
             priority += move.pos2.first * 10; // 只考虑放置位置的层
+        }
+        else if (move.type == MoveType::COMBINED_R2_DOUBLE) {
+            priority += (move.pos1.first + move.pos2.first + move.pos3.first) * 10;
+        }
+        else if (move.type == MoveType::PUSH_R2_DOUBLE) {
+            priority += (move.pos2.first + move.pos3.first) * 10;
         }
         
         // 优先时间效率高的移动
@@ -743,20 +1099,43 @@ public:
     }
     
     // 极小化极大算法
-    int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player, int maxdepth) {
+    int minimax(int depth, bool isMaximizing, int alpha, int beta, Player player, int maxDepth) {
         if (depth == 0 || isGameOver()) {
-            return evaluate(player)- (maxdepth - depth) * 5; // 考虑时间效率
+            int baseScore = evaluate(player);
+            
+            // 如果是获胜局面，不应用折扣
+            if (abs(baseScore) >= WIN_SCORE - 1000) {
+                return baseScore-70*(maxDepth - depth);
+            }
+            
+            // 对非获胜局面应用深度折扣 - 每层折扣10%
+            double discountFactor = 0.9;
+            // double discountedScore = baseScore * pow(discountFactor, maxDepth - depth);
+            double discountedScore = baseScore;
+            
+            return static_cast<int>(discountedScore);
         }
         
         Player currentPlayer = isMaximizing ? player : 
-                            (player == Player::US ? Player::OPPONENT : Player::US);
+                             (player == Player::US ? Player::OPPONENT : Player::US);
         
         // 获取当前玩家所有可用的移动（包括所有机器人类型和组合移动）
         vector<Move> allMoves = getAvailableMoves(currentPlayer, "ALL");
         
         // 如果没有可用移动，直接返回评估值
         if (allMoves.empty()) {
-            return evaluate(player);
+            int baseScore = evaluate(player);
+            
+            // 如果是获胜局面，不应用折扣
+            if (abs(baseScore) >= WIN_SCORE - 1000) {
+                return baseScore;
+            }
+            
+            // 对非获胜局面应用深度折扣
+            double discountFactor = 0.9;
+            double discountedScore = baseScore * pow(discountFactor, maxDepth - depth);
+            
+            return static_cast<int>(discountedScore);
         }
         
         // 按优先级排序移动（可选，提高剪枝效率）
@@ -771,7 +1150,7 @@ public:
                 // 模拟移动
                 executeMove(move, currentPlayer);
                 
-                int eval = minimax(depth - 1, false, alpha, beta, player,maxdepth);
+                int eval = minimax(depth - 1, false, alpha, beta, player, maxDepth);
                 maxEval = max(maxEval, eval);
                 
                 // 撤销移动
@@ -788,7 +1167,7 @@ public:
                 // 模拟移动
                 executeMove(move, currentPlayer);
                 
-                int eval = minimax(depth - 1, true, alpha, beta, player,maxdepth);
+                int eval = minimax(depth - 1, true, alpha, beta, player, maxDepth);
                 minEval = min(minEval, eval);
                 
                 // 撤销移动
@@ -843,14 +1222,7 @@ public:
         // sort(moves.begin(), moves.end(), [&](const Move& a, const Move& b) {
         //     return evaluateMovePriority(a, player) > evaluateMovePriority(b, player);
         // });
-        cout << "候选移动数量: " << moves.size() << endl;
-        for (const auto& move : moves) {
-            cout << "移动类型: " << static_cast<int>(move.type) 
-             << ", 位置1: (" << move.pos1.first << "," << move.pos1.second << ")"
-             << ", 位置2: (" << move.pos2.first << "," << move.pos2.second << ")" << endl;
-        }
-
-
+        
         Move bestMove = moves[0];
         int bestScore = numeric_limits<int>::min();
         
@@ -860,7 +1232,7 @@ public:
             
             int score = minimax(depth - 1, false, 
                               numeric_limits<int>::min(),
-                              numeric_limits<int>::max(), player,depth);
+                              numeric_limits<int>::max(), player, depth);
             
             // 考虑时间效率
             score -= move.timeCost * 10;
@@ -868,9 +1240,18 @@ public:
             // 撤销移动
             undoMove(move, player);
             
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove = move;
+            // 修改为 >= 确保找到最优移动
+            if (score >= bestScore) {
+                // 如果分数相同，选择时间代价更小的移动
+                if (score == bestScore && move.timeCost < bestMove.timeCost) {
+                    bestScore = score;
+                    bestMove = move;
+                } 
+                // 如果分数更高，直接选择
+                else if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = move;
+                }
             }
         }
         outScore = bestScore;
@@ -976,8 +1357,11 @@ public:
                 case MoveType::COMBINED:
                     cout << "理由：R1和R2同时移动效率最高" << endl;
                     break;
-                case MoveType::DOUBLE:
+                case MoveType::R2_LIFTED_DOUBLE:
                     cout << "理由：被举起R2的复合移动效率高" << endl;
+                    break;
+                case MoveType::R2_DOUBLE:
+                    cout << "理由：R2单独在中层放置两个相邻方块效率高" << endl;
                     break;
                 case MoveType::SINGLE:
                     cout << "理由：单个机器人移动最优" << endl;
@@ -987,6 +1371,12 @@ public:
                     break;
                 case MoveType::PUSH_PLACE:
                     cout << "理由：推下对方威胁同时推进我方布局" << endl;
+                    break;
+                case MoveType::COMBINED_R2_DOUBLE:
+                    cout << "理由：R1放置底层同时R2在中层双放置效率最高" << endl;
+                    break;
+                case MoveType::PUSH_R2_DOUBLE:
+                    cout << "理由：推下对方威胁同时R2在中层双放置效率高" << endl;
                     break;
             }
         } else {
@@ -1007,8 +1397,15 @@ public:
                      << "第" << (move.pos1.second + 1) << "列" << endl;
                 break;
                 
-            case MoveType::DOUBLE:
-                cout << "复合放置 - " << layerNames[move.pos1.first] 
+            case MoveType::R2_LIFTED_DOUBLE:
+                cout << "被举起R2复合放置 - " << layerNames[move.pos1.first] 
+                     << "第" << (move.pos1.second + 1) << "列 和 "
+                     << layerNames[move.pos2.first] 
+                     << "第" << (move.pos2.second + 1) << "列" << endl;
+                break;
+                
+            case MoveType::R2_DOUBLE:
+                cout << "R2中层双放置 - " << layerNames[move.pos1.first] 
                      << "第" << (move.pos1.second + 1) << "列 和 "
                      << layerNames[move.pos2.first] 
                      << "第" << (move.pos2.second + 1) << "列" << endl;
@@ -1032,6 +1429,20 @@ public:
                      << layerNames[move.pos2.first] 
                      << "第" << (move.pos2.second + 1) << "列" << endl;
                 break;
+                
+            case MoveType::COMBINED_R2_DOUBLE:
+                cout << "组合移动+R2双放置 - R1在" << layerNames[move.pos1.first] 
+                     << "第" << (move.pos1.second + 1) << "列, R2在" 
+                     << layerNames[move.pos2.first] << "第" << (move.pos2.second + 1) << "列"
+                     << "和" << layerNames[move.pos3.first] << "第" << (move.pos3.second + 1) << "列" << endl;
+                break;
+                
+            case MoveType::PUSH_R2_DOUBLE:
+                cout << "推下+R2双放置组合 - R1推下" << layerNames[move.pos1.first] 
+                     << "第" << (move.pos1.second + 1) << "列, R2在" 
+                     << layerNames[move.pos2.first] << "第" << (move.pos2.second + 1) << "列"
+                     << "和" << layerNames[move.pos3.first] << "第" << (move.pos3.second + 1) << "列" << endl;
+                break;
         }
     }
     
@@ -1046,15 +1457,15 @@ int main() {
     
     
     // 示例初始局面
-    // game.placeKFS(0, 0, Player::NONE);    // 底层左
-    game.placeKFS(0, 1, Player::US);      // 底层中 - 我方
-    // game.placeKFS(0, 2, Player::NONE);    // 底层右
-    // game.placeKFS(1, 0, Player::NONE);    // 中层左
-    game.placeKFS(1, 1, Player::OPPONENT); // 中层中 - 对方
-    // game.placeKFS(1, 2, Player::NONE);    // 中层右
-    // game.placeKFS(2, 0, Player::NONE);    // 顶层左
-    game.placeKFS(2, 1, Player::OPPONENT); // 顶层中 - 对方
-    game.placeKFS(2, 2, Player::US);    // 顶层右
+    game.placeKFS(0, 0, Player::OPPONENT);    
+    game.placeKFS(0, 1, Player::NONE);      
+    game.placeKFS(0, 2, Player::NONE);    
+    game.placeKFS(1, 0, Player::NONE);   
+    game.placeKFS(1, 1, Player::OPPONENT); 
+    game.placeKFS(1, 2, Player::NONE);   
+    game.placeKFS(2, 0, Player::NONE);   
+    game.placeKFS(2, 1, Player::NONE); 
+    game.placeKFS(2, 2, Player::NONE);    
 
     cout << "当前棋盘状态:" << endl;
     game.displayBoard();

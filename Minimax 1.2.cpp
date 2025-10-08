@@ -12,6 +12,7 @@
 9. 修改minimax算法，添加深度折扣
 10. 优化移动选择逻辑
 11. 添加三个位置支持，用于同时放置三个方块
+12. 添加第二优结果输出功能
 */
 
 #include <iostream>
@@ -55,6 +56,11 @@ struct Move {
         } else {
             timeCost = 1;
         }
+    }
+    
+    // 重载==运算符用于比较移动
+    bool operator==(const Move& other) const {
+        return type == other.type && pos1 == other.pos1 && pos2 == other.pos2 && pos3 == other.pos3;
     }
 };
 
@@ -1258,6 +1264,53 @@ public:
         return bestMove;
     }
     
+    // 新增：查找最优和第二优移动
+    pair<Move, Move> findTopTwoMoves(Player player, int &bestScore, int &secondBestScore, const string& robotType = "ALL", int depth = 3) {
+        vector<Move> moves = getAvailableMoves(player, robotType);
+        
+        if (moves.empty()) {
+            Move invalidMove = Move(MoveType::SINGLE, {-1, -1});
+            return make_pair(invalidMove, invalidMove);
+        }
+        
+        Move bestMove = moves[0];
+        Move secondBestMove = moves[0];
+        bestScore = numeric_limits<int>::min();
+        secondBestScore = numeric_limits<int>::min();
+        
+        for (const auto& move : moves) {
+            // 模拟移动
+            executeMove(move, player);
+            
+            int score = minimax(depth - 1, false, 
+                              numeric_limits<int>::min(),
+                              numeric_limits<int>::max(), player, depth);
+            
+            // 考虑时间效率
+            score -= move.timeCost * 10;
+            
+            // 撤销移动
+            undoMove(move, player);
+            
+            // 更新最优和第二优移动
+            if (score > bestScore) {
+                // 更新第二优为原来的最优
+                secondBestScore = bestScore;
+                secondBestMove = bestMove;
+                
+                // 更新最优
+                bestScore = score;
+                bestMove = move;
+            } else if (score > secondBestScore && score != bestScore) {
+                // 更新第二优
+                secondBestScore = score;
+                secondBestMove = move;
+            }
+        }
+        
+        return make_pair(bestMove, secondBestMove);
+    }
+    
     // 放置KFS（兼容原有接口）
     bool placeKFS(int layer, int col, Player player) {
         if (layer < 0 || layer >= 3 || col < 0 || col >= 3) {
@@ -1341,16 +1394,19 @@ public:
     void makeStrategicDecision() {
         cout << "=== 策略分析 ===" << endl;
         
-        int allMovesScore = numeric_limits<int>::min();
+        int bestScore = numeric_limits<int>::min();
+        int secondBestScore = numeric_limits<int>::min();
         
-        // 直接使用新的组合移动搜索
-        auto bestMove = game.findOptimalMove(Player::US, allMovesScore, "ALL", 3);
+        // 使用新的函数获取最优和第二优移动
+        auto topTwoMoves = game.findTopTwoMoves(Player::US, bestScore, secondBestScore, "ALL", 3);
+        Move bestMove = topTwoMoves.first;
+        Move secondBestMove = topTwoMoves.second;
         
         cout << "\n=== 综合决策 ===" << endl;
         if (bestMove.pos1.first != -1) {
             cout << "最优移动: ";
             printMove(bestMove);
-            cout << "得分: " << allMovesScore << endl;
+            cout << "得分: " << bestScore << endl;
             
             // 分析移动类型优势
             switch (bestMove.type) {
@@ -1379,11 +1435,50 @@ public:
                     cout << "理由：推下对方威胁同时R2在中层双放置效率高" << endl;
                     break;
             }
+            
+            cout << "-------------------" << endl;
+            
+            // 输出第二优移动
+            if (secondBestMove.pos1.first != -1) {
+                cout << "第二优移动: ";
+                printMove(secondBestMove);
+                cout << "得分: " << secondBestScore << endl;
+                
+                // 分析第二优移动类型优势
+                switch (secondBestMove.type) {
+                    case MoveType::COMBINED:
+                        cout << "理由：R1和R2同时移动效率较高" << endl;
+                        break;
+                    case MoveType::R2_LIFTED_DOUBLE:
+                        cout << "理由：被举起R2的复合移动效率较高" << endl;
+                        break;
+                    case MoveType::R2_DOUBLE:
+                        cout << "理由：R2单独在中层放置两个相邻方块效率较高" << endl;
+                        break;
+                    case MoveType::SINGLE:
+                        cout << "理由：单个机器人移动较优" << endl;
+                        break;
+                    case MoveType::PUSH:
+                        cout << "理由：备选的阻止对方获胜威胁方案" << endl;
+                        break;
+                    case MoveType::PUSH_PLACE:
+                        cout << "理由：备选的推下+放置组合方案" << endl;
+                        break;
+                    case MoveType::COMBINED_R2_DOUBLE:
+                        cout << "理由：备选的R1+R2双放置组合方案" << endl;
+                        break;
+                    case MoveType::PUSH_R2_DOUBLE:
+                        cout << "理由：备选的推下+R2双放置组合方案" << endl;
+                        break;
+                }
+            } else {
+                cout << "没有有效的第二优移动" << endl;
+            }
         } else {
             cout << "没有有效的移动" << endl;
         }
         cout << "================" << endl;
-        cout << "执行移动后局面" << endl;
+        cout << "执行最优移动后局面" << endl;
         game.executeMove(bestMove, Player::US);
         game.displayBoard();
     }

@@ -1,18 +1,11 @@
-//2025-09-24
-// 三维井字棋最优摆放模型 version 1.7
-/*主要改进：
-1. 支持复合移动（同时放置两个方块）
-2. 添加推下操作策略（只在必要时使用）
-3. 考虑KFS资源限制（R1:3个，R2:3个）
-4. 优化评估函数，考虑时间效率
-5. 支持R1和R2同时移动的组合策略
-6. 支持R1推下同时R2放置的新移动类型
-7. 新增R2_DOUBLE移动类型（R2单独在中层放置两个相邻方块）
-8. 新增COMBINED_R2_DOUBLE和PUSH_R2_DOUBLE组合移动
-9. 修改minimax算法，添加深度折扣
-10. 优化移动选择逻辑
-11. 添加三个位置支持，用于同时放置三个方块
-12. 添加第二优结果输出功能
+//2025-10-09
+// 三维井字棋最优摆放模型 version 1.2
+
+/*
+本代码基于minimax算法评估局面，同时剪枝提高效率
+待优化：
+minimax算法为回合制游戏设计，当前版本未考虑时间，速度等因素  -- 未来版本将引入蒙特卡洛树搜索（MCTS）等更复杂算法，或修改代码逻辑
+
 */
 
 #include <iostream>
@@ -29,23 +22,23 @@ enum class Player { NONE, US, OPPONENT };
 
 // 移动类型
 enum class MoveType { 
-    SINGLE,               // 单个放置
-    R2_LIFTED_DOUBLE,     // 被举起的R2同时放置两个方块
-    R2_DOUBLE,            // R2单独在中层放置两个相邻方块
-    PUSH,                 // 推下对方KFS
-    COMBINED,             // R1和R2同时放置
-    PUSH_PLACE,           // R1推下同时R2放置
-    COMBINED_R2_DOUBLE,   // R1放置底层同时R2在中层放置两个方块
-    PUSH_R2_DOUBLE        // R1推下同时R2在中层放置两个方块
+    SINGLE,               // 单个放置(R1 R2 R2Lifted)
+    R2_LIFTED_DOUBLE,     // 被举起的R2同时放置两个方块(R2Lifted)
+    R2_DOUBLE,            // R2单独在中层放置两个相邻方块(R2)
+    PUSH,                 // 推下对方KFS(R1)
+    COMBINED,             // R1和R2同时放置(R1andR2)
+    PUSH_PLACE,           // R1推下同时R2放置(R1andR2)
+    COMBINED_R2_DOUBLE,   // R1放置底层同时R2在中层放置两个方块(R1andR2)
+    PUSH_R2_DOUBLE        // R1推下同时R2在中层放置两个方块(R1andR2)
 };
 
 // 移动表示
 struct Move {
     MoveType type;
-    pair<int, int> pos1;  // 第一个位置
-    pair<int, int> pos2;  // 第二个位置
-    pair<int, int> pos3;  // 第三个位置（用于三个方块的情况）
-    int timeCost;         // 时间代价
+    pair<int, int> pos1;  // 第一个位置 在combined中为R1摆放或推下位置
+    pair<int, int> pos2;  // 第二个位置 在combined中为R2摆放位置
+    pair<int, int> pos3;  // 第三个位置 在COMBINED_R2_DOUBLE和PUSH_R2_DOUBLE中为R2的第二个摆放位置
+    int timeCost;         // 时间代价 只在findOptions中使用，并未影响决策
     
     Move(MoveType t, pair<int, int> p1, pair<int, int> p2 = {-1, -1}, pair<int, int> p3 = {-1, -1}) 
         : type(t), pos1(p1), pos2(p2), pos3(p3) {
@@ -87,6 +80,17 @@ private:
     vector<vector<pair<int, int>>> winningPatterns;
 
 public:
+    // 设置我方兵器状态
+    void Set_usWeaponUsed(bool used) {
+        usWeaponUsed = used;
+    }
+
+    // 设置对方兵器状态
+    void Set_opponentWeaponUsed(bool used) {
+        opponentWeaponUsed = used;
+    }
+
+    //棋盘初始化，构造进行
     ThreeDTicTacToe() {
         // 初始化3层×3列棋盘
         board.resize(3, vector<Player>(3, Player::NONE));
@@ -128,7 +132,7 @@ public:
         
         // 同层相邻：水平、垂直或对角线
         if (layer1 == layer2) {
-            return abs(col1 - col2) <= 1; // 修改为允许对角线相邻
+            return abs(col1 - col2) <= 1; 
         }
         // 跨层相邻：同一列或对角线
         else if (abs(layer1 - layer2) == 1) {
@@ -172,7 +176,7 @@ public:
         return score;
     }
     
-    // 评估函数：综合考虑获胜可能性和得分
+    // 评估函数：综合考虑获胜可能性和得分，只在思考深度为零或者对局结束调用
     int evaluate(Player player) {
         Player opponent = (player == Player::US) ? Player::OPPONENT : Player::US;
         
@@ -210,24 +214,37 @@ public:
                 else emptyCount++;
             }
             
+            // // 如果我方有获胜机会
+            // if (playerCount == 2 && emptyCount == 1) {
+            //     threatScore += 500; // 即将获胜，高优先级
+            // }
+            // // 如果对方有获胜威胁
+            // else if (opponentCount == 2 && emptyCount == 1) {
+            //     threatScore -= 600; // 必须阻止，更高优先级
+            // }
+            // // 如果我方有发展潜力
+            // else if (playerCount == 1 && emptyCount == 2) {
+            //     threatScore += 100;
+            // }
+
             // 如果我方有获胜机会
             if (playerCount == 2 && emptyCount == 1) {
-                threatScore += 500; // 即将获胜，高优先级
+                threatScore += 50; // 即将获胜，高优先级
             }
             // 如果对方有获胜威胁
             else if (opponentCount == 2 && emptyCount == 1) {
-                threatScore -= 600; // 必须阻止，更高优先级
+                threatScore -= 60; // 必须阻止，更高优先级
             }
             // 如果我方有发展潜力
             else if (playerCount == 1 && emptyCount == 2) {
-                threatScore += 100;
+                threatScore += 10;
             }
         }
         
         return threatScore;
     }
     
-    // 获取所有可用移动（包括复合移动、推下操作和组合移动）
+    // 获取所有可用移动
     vector<Move> getAvailableMoves(Player player, const string& robotType = "ALL") {
         vector<Move> moves;
         Player opponent = (player == Player::US) ? Player::OPPONENT : Player::US;
@@ -369,7 +386,6 @@ public:
         bool weaponUsed = (player == Player::US) ? usWeaponUsed : opponentWeaponUsed;
         // 生成推下移动（只在必要时）
         if (robotType=="R1" && !weaponUsed && evaluateThreats(player, opponent) < -500) {
-            // 只在对方有获胜威胁时考虑推下
             for (int layer = 0; layer < 3; layer++) {
                 for (int col = 0; col < 3; col++) {
                     if (board[layer][col] == opponent) {
@@ -608,7 +624,6 @@ public:
                 if (board[layer1][col1] != Player::NONE || 
                     board[layer2][col2] != Player::NONE) return false;
                 
-                // R2_LIFTED_DOUBLE移动只发生在中层和顶层，只使用R2 KFS
                 if (player == Player::US) {
                     if (usKFS_R2 < 2) return false;
                     usKFS_R2 -= 2;
@@ -632,7 +647,6 @@ public:
                 if (board[layer1][col1] != Player::NONE || 
                     board[layer2][col2] != Player::NONE) return false;
                 
-                // R2_DOUBLE移动只使用R2 KFS
                 if (player == Player::US) {
                     if (usKFS_R2 < 2) return false;
                     usKFS_R2 -= 2;
@@ -1012,7 +1026,7 @@ public:
         }
     }
     
-    // 评估移动的优先级（用于排序）
+    // 评估移动的优先级（仅用于排序，未影响minimax等决策函数）
     int evaluateMovePriority(const Move& move, Player player) {
         int priority = 0;
         
@@ -1115,7 +1129,7 @@ public:
             }
             
             // 对非获胜局面应用深度折扣 - 每层折扣10%
-            double discountFactor = 0.9;
+            // double discountFactor = 0.9;
             // double discountedScore = baseScore * pow(discountFactor, maxDepth - depth);
             double discountedScore = baseScore;
             
@@ -1408,34 +1422,6 @@ public:
             printMove(bestMove);
             cout << "得分: " << bestScore << endl;
             
-            // 分析移动类型优势
-            switch (bestMove.type) {
-                case MoveType::COMBINED:
-                    cout << "理由：R1和R2同时移动效率最高" << endl;
-                    break;
-                case MoveType::R2_LIFTED_DOUBLE:
-                    cout << "理由：被举起R2的复合移动效率高" << endl;
-                    break;
-                case MoveType::R2_DOUBLE:
-                    cout << "理由：R2单独在中层放置两个相邻方块效率高" << endl;
-                    break;
-                case MoveType::SINGLE:
-                    cout << "理由：单个机器人移动最优" << endl;
-                    break;
-                case MoveType::PUSH:
-                    cout << "理由：需要阻止对方获胜威胁" << endl;
-                    break;
-                case MoveType::PUSH_PLACE:
-                    cout << "理由：推下对方威胁同时推进我方布局" << endl;
-                    break;
-                case MoveType::COMBINED_R2_DOUBLE:
-                    cout << "理由：R1放置底层同时R2在中层双放置效率最高" << endl;
-                    break;
-                case MoveType::PUSH_R2_DOUBLE:
-                    cout << "理由：推下对方威胁同时R2在中层双放置效率高" << endl;
-                    break;
-            }
-            
             cout << "-------------------" << endl;
             
             // 输出第二优移动
@@ -1445,32 +1431,7 @@ public:
                 cout << "得分: " << secondBestScore << endl;
                 
                 // 分析第二优移动类型优势
-                switch (secondBestMove.type) {
-                    case MoveType::COMBINED:
-                        cout << "理由：R1和R2同时移动效率较高" << endl;
-                        break;
-                    case MoveType::R2_LIFTED_DOUBLE:
-                        cout << "理由：被举起R2的复合移动效率较高" << endl;
-                        break;
-                    case MoveType::R2_DOUBLE:
-                        cout << "理由：R2单独在中层放置两个相邻方块效率较高" << endl;
-                        break;
-                    case MoveType::SINGLE:
-                        cout << "理由：单个机器人移动较优" << endl;
-                        break;
-                    case MoveType::PUSH:
-                        cout << "理由：备选的阻止对方获胜威胁方案" << endl;
-                        break;
-                    case MoveType::PUSH_PLACE:
-                        cout << "理由：备选的推下+放置组合方案" << endl;
-                        break;
-                    case MoveType::COMBINED_R2_DOUBLE:
-                        cout << "理由：备选的R1+R2双放置组合方案" << endl;
-                        break;
-                    case MoveType::PUSH_R2_DOUBLE:
-                        cout << "理由：备选的推下+R2双放置组合方案" << endl;
-                        break;
-                }
+               
             } else {
                 cout << "没有有效的第二优移动" << endl;
             }
@@ -1549,18 +1510,30 @@ public:
 int main() {
     StrategyManager manager;
     ThreeDTicTacToe& game = manager.getGame();
-    
-    
-    // 示例初始局面
-    game.placeKFS(0, 0, Player::OPPONENT);    
+
+    game.Set_usWeaponUsed(false);
+    game.Set_opponentWeaponUsed(false);
+    game.placeKFS(0, 0, Player::NONE);    
     game.placeKFS(0, 1, Player::NONE);      
     game.placeKFS(0, 2, Player::NONE);    
     game.placeKFS(1, 0, Player::NONE);   
-    game.placeKFS(1, 1, Player::OPPONENT); 
+    game.placeKFS(1, 1, Player::NONE); 
     game.placeKFS(1, 2, Player::NONE);   
     game.placeKFS(2, 0, Player::NONE);   
     game.placeKFS(2, 1, Player::NONE); 
     game.placeKFS(2, 2, Player::NONE);    
+
+    // game.Set_usWeaponUsed(true);
+    // game.Set_opponentWeaponUsed(false);
+    // game.placeKFS(0, 0, Player::NONE);    
+    // game.placeKFS(0, 1, Player::NONE);      
+    // game.placeKFS(0, 2, Player::OPPONENT);    
+    // game.placeKFS(1, 0, Player::US);   
+    // game.placeKFS(1, 1, Player::OPPONENT); 
+    // game.placeKFS(1, 2, Player::NONE);   
+    // game.placeKFS(2, 0, Player::NONE);   
+    // game.placeKFS(2, 1, Player::NONE); 
+    // game.placeKFS(2, 2, Player::NONE);
 
     cout << "当前棋盘状态:" << endl;
     game.displayBoard();
@@ -1568,6 +1541,6 @@ int main() {
     
     // 生成策略建议
     manager.makeStrategicDecision();
-    
+    cout << "testnumber:1" << endl;
     return 0;
 }
